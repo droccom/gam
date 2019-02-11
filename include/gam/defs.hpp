@@ -32,28 +32,6 @@
 
 namespace gam {
 
-/**
- * @brief access level for global pointer
- *
- * AccessLevel defines access rights for global pointers by an executor:
- * - AL_NIL not accessible by the executor
- * - AL_PUBLIC read-only accessible by all executors
- * - AL_PRIVATE only accessible by the owner
- */
-enum AccessLevel { AL_PUBLIC, AL_PRIVATE };
-
-///**
-// * @brief role in a executor-to-executor communication
-// *
-// * Role defines the role of an executor within an executor-to-executor
-// communication:
-// * - CR_PRODUCER executor acts as producer
-// * - CR_CONSUMER executor acts as consumer
-// */
-// enum Role {
-//    CR_PRODUCER, CR_CONSUMER
-//};
-
 typedef uint32_t executor_id;
 
 template <typename T>

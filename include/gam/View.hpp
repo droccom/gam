@@ -33,10 +33,10 @@
 #include <sstream>
 #include <unordered_map>
 
-#include "gam/backend_ptr.hpp"
 #include "gam/ConcurrentMapWrap.hpp"
-#include "gam/defs.hpp"
 #include "gam/GlobalPointer.hpp"
+#include "gam/backend_ptr.hpp"
+#include "gam/defs.hpp"
 
 namespace gam {
 
@@ -70,10 +70,6 @@ class View {
    */
   inline backend_ptr *committed(const uint64_t a) {
     return view_map[a].committed;
-  }
-
-  inline AccessLevel access_level(const uint64_t a) {
-    return view_map[a].access_level;
   }
 
   inline executor_id owner(const uint64_t a) { return view_map[a].owner; }
@@ -113,11 +109,6 @@ class View {
   inline void bind_committed(const uint64_t a, backend_ptr *const p) {
     view_map[a].committed = p;
     LOGLN("VW  bind committed: %llu -> %p", a, p);
-  }
-
-  inline void bind_access_level(const uint64_t a, const AccessLevel a_) {
-    view_map[a].access_level = a_;
-    LOGLN("VW  bind access level: %llu -> %d", a, a_);
   }
 
   inline void bind_owner(const uint64_t a, const executor_id o) {
@@ -173,9 +164,8 @@ class View {
    */
   std::string to_string(const uint64_t a) {
     std::stringstream s;
-    s << "(committed=" << committed(a) << " access=" << access_level(a)
-      << " owner=" << owner(a) << " author=" << author(a)
-      << " child=" << child(a) << ")";
+    s << "(committed=" << committed(a) << " owner=" << owner(a)
+      << " author=" << author(a) << " child=" << child(a) << ")";
     return s.str();
   }
 
@@ -184,7 +174,6 @@ class View {
     backend_ptr *committed = nullptr;
     void *child = nullptr;
     executor_id owner, author;
-    AccessLevel access_level;
   };
 
   ConcurrentMapWrap<std::unordered_map<uint64_t, entry>> view_map;

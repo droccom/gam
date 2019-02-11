@@ -232,7 +232,7 @@ class Context {
    */
   template <class T, typename Deleter>
   GlobalPointer mmap_public(T &lp, Deleter d) {
-    GlobalPointer res = mmap_global<AL_PUBLIC>(&lp, d);
+    GlobalPointer res = mmap_global(&lp, d, true);
     uint64_t a = res.address();
 
     /* initialize owner and child fields with void values */
@@ -247,7 +247,7 @@ class Context {
    */
   template <class T, typename Deleter>
   GlobalPointer mmap_private(T &lp, Deleter d) {
-    GlobalPointer res = mmap_global<AL_PRIVATE>(&lp, d);
+    GlobalPointer res = mmap_global(&lp, d, false);
     uint64_t a = res.address();
 
     /* update owner */
@@ -266,7 +266,7 @@ class Context {
     uint64_t a = p.address();
 
     /* clean up parenthood */
-    if (view.access_level(a) == AL_PRIVATE) {
+    if (p.is_private()) {
       assert(view.has_child(a));
       assert(view.has_parent(view.child(a)));
       view.unbind_parent(view.child(a));
@@ -286,12 +286,11 @@ class Context {
   inline void push_public(const GlobalPointer &p, const executor_id e) {
     assert(p.is_address());
     uint64_t a = p.address();
-    assert(view.access_level(a) == AL_PUBLIC);
+    assert(p.is_public());
     LOGLN_OS("CTX push public=" << p << " to=" << e);
 
     pap_pointer buf;
     buf.p = p;
-    buf.al = AL_PUBLIC;
     buf.author = view.author(a);
     pap_links->send(buf, e);
   }
@@ -300,7 +299,7 @@ class Context {
     assert(p.is_address());
     LOGLN_OS("CTX push private=" << p << " to=" << e);
     uint64_t a = p.address();
-    assert(view.access_level(a) == AL_PRIVATE);
+    assert(p.is_private());
     assert(view.owner(a) == rank_);
 
     /* switch ownership */
@@ -308,7 +307,6 @@ class Context {
 
     pap_pointer buf;
     buf.p = p;
-    buf.al = AL_PRIVATE;
     buf.author = view.author(a);
     pap_links->send(buf, e);
   }
@@ -332,7 +330,7 @@ class Context {
     pap_links->recv(buf, e);
 
     /* ensure a public pointer was pulled */
-    if (!buf.p.is_address() || buf.al == AL_PUBLIC) return pulled_public(buf);
+    if (!buf.p.is_address() || buf.p.is_public()) return pulled_public(buf);
 
     std::cerr << "> pull_public() pulled a non-public pointer: \n"
               << buf.p << std::endl;
@@ -349,7 +347,7 @@ class Context {
     pap_links->recv(buf);
 
     /* ensure a public pointer was pulled */
-    if (!buf.p.is_address() || buf.al == AL_PUBLIC) return pulled_public(buf);
+    if (!buf.p.is_address() || buf.p.is_public()) return pulled_public(buf);
 
     std::cerr << "> pull_public() pulled a non-public pointer: \n"
               << buf.p << std::endl;
@@ -365,7 +363,7 @@ class Context {
     pap_links->recv(buf, e);
 
     /* ensure a private pointer was pulled */
-    if (!buf.p.is_address() || buf.al == AL_PRIVATE) return pulled_private(buf);
+    if (!buf.p.is_address() || buf.p.is_private()) return pulled_private(buf);
 
     std::cerr << "> pull_private() pulled a non-private pointer: \n"
               << buf.p << std::endl;
@@ -381,7 +379,7 @@ class Context {
     pap_links->recv(buf);
 
     /* ensure a private pointer was pulled */
-    if (!buf.p.is_address() || buf.al == AL_PRIVATE) return pulled_private(buf);
+    if (!buf.p.is_address() || buf.p.is_private()) return pulled_private(buf);
 
     std::cerr << "> pull_private() pulled an invalid pointer: \n"
               << buf.p << std::endl;
@@ -404,7 +402,7 @@ class Context {
 
     LOGLN_OS("CTX local public " << p);
     uint64_t a = p.address();
-    assert(view.access_level(a) == AL_PUBLIC);
+    assert(p.is_public());
 
     /* allocate local memory */
     T *lp = (T *)local_new<T>();
@@ -429,7 +427,7 @@ class Context {
     assert(p.is_address());
     uint64_t a = p.address();
     LOGLN_OS("CTX local private " << p);
-    assert(view.access_level(a) == AL_PRIVATE);
+    assert(p.is_private());
 
     executor_id auth = view.author(a);
 
@@ -456,16 +454,15 @@ class Context {
   GlobalPointer publish(const GlobalPointer &p) {
     LOGLN_OS("CTX publishing p=" << p);
     assert(p.is_address());
-    assert(is_private(p));
+    assert(p.is_private());
     assert(am_owner(p));
     uint64_t a = p.address();
     executor_id auth = view.author(a);
 
     /* map to fresh global address */
-    auto res = make_global(rank_);
+    auto res = make_global(rank_, true);
     assert(res.is_address());
     uint64_t a_ = res.address();
-    view.bind_access_level(a_, AL_PUBLIC);
 
     /* steal memory */
     backend_ptr *bp_;
@@ -510,19 +507,9 @@ class Context {
    *
    ***************************************************************************
    */
-  bool is_public(const GlobalPointer &p) {
-    assert(p.is_address());
-    return view.access_level(p.address()) == AL_PUBLIC;
-  }
-
-  bool is_private(const GlobalPointer &p) {
-    assert(p.is_address());
-    return view.access_level(p.address()) == AL_PRIVATE;
-  }
-
   bool am_owner(const GlobalPointer &p) {
     assert(p.is_address());
-    assert(is_private(p));
+    assert(p.is_private());
     return view.owner(p.address()) == rank_;
   }
 
@@ -561,7 +548,7 @@ class Context {
   inline void rc_inc(const GlobalPointer &p) {
     assert(p.is_address());
     uint64_t a = p.address();
-    assert(view.access_level(a) == AL_PUBLIC);
+    assert(p.is_public());
 
     if (view.author(a) == rank_)
       mc.rc_inc(a);
@@ -572,7 +559,7 @@ class Context {
   inline void rc_dec(const GlobalPointer &p) {
     assert(p.is_address());
     uint64_t a = p.address();
-    assert(view.access_level(a) == AL_PUBLIC);
+    assert(p.is_public());
 
     if (view.author(a) == rank_) {
       if (mc.rc_dec(a) == 0)
@@ -650,7 +637,6 @@ class Context {
   struct pap_pointer {
     GlobalPointer p;
     executor_id author = 0;
-    AccessLevel al;
   };
 
   struct daemon_pointer {
@@ -771,9 +757,9 @@ class Context {
     }
   };
 
-  template <AccessLevel al, class T, typename Deleter>
-  GlobalPointer mmap_global(T *lp, Deleter d) {
-    auto res = make_global(rank_);
+  template <class T, typename Deleter>
+  GlobalPointer mmap_global(T *lp, Deleter d, bool is_public) {
+    auto res = make_global(rank_, is_public);
     uint64_t a = res.address();
 
     LOGLN("CTX mmap global=%llu -> local=%p", a, lp);
@@ -785,7 +771,6 @@ class Context {
     view.bind_committed(a, bp);
 
     /* update view information */
-    view.bind_access_level(a, al);
     view.bind_author(a, rank_);
 
     return res;
@@ -809,7 +794,6 @@ class Context {
       LOGLN_OS("CTX pulled public=" << buf.p);
 
       uint64_t a = buf.p.address();
-      view.bind_access_level(a, buf.al);
       view.bind_owner(a, (executor_id)GlobalPointer::max_home + 1);
       view.bind_author(a, buf.author);
       view.bind_committed(a, nullptr);
@@ -825,7 +809,6 @@ class Context {
 
       uint64_t a = buf.p.address();
       if (!view.mapped(a) || buf.author != rank_) {
-        view.bind_access_level(a, AL_PRIVATE);
         view.bind_author(a, buf.author);
         view.bind_committed(a, nullptr);
       }
@@ -859,7 +842,7 @@ class Context {
     assert(p.is_address());
     LOGLN_OS("CTX withdraw=" << p);
     uint64_t a = p.address();
-    assert(view.access_level(a) == AL_PRIVATE);
+    assert(p.is_private());
     assert(!am_author(p));
     assert(am_owner(p));
 

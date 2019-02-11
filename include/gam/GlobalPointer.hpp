@@ -50,7 +50,8 @@ namespace gam {
  *
  * 64-bit descriptor is composed by:
  * - 1-bit  reserved (0 = address, 1 = reserved)
- * - 31-bit home partition
+ * - 1-bit  access level (0 = private, 1 = public)
+ * - 30-bit home partition
  * - 32-bit offset
  */
 class GlobalPointer {
@@ -64,11 +65,14 @@ class GlobalPointer {
 
   explicit GlobalPointer(uint64_t descriptor) : descriptor_(descriptor) {}
 
-  GlobalPointer(executor_id home, uint64_t lsb)
-      : GlobalPointer(lsb | ((uint64_t)home << 32)) {
+  GlobalPointer(executor_id home, bool is_public, uint64_t lsb) {
+    assert(home <= GlobalPointer::max_home);  // todo error reporting
+
+    address(lsb | al_mask(is_public) | ((uint64_t)home << 32));
+
     assert(is_address());
-    assert((this->lsb() | ((uint64_t)home << 32)) == this->address());
     assert(home == this->home());
+    assert(this->is_public() == is_public);
   }
 
   bool operator==(const GlobalPointer& gp) {
@@ -84,6 +88,9 @@ class GlobalPointer {
   bool is_address() const {
     return (descriptor_ != 0) && (descriptor_ < first_reserved);
   }
+
+  bool is_public() const { return (descriptor_ & al_mask(true)) != 0; }
+  bool is_private() const { return !is_public(); }
 
   /*
    ***************************************************************************
@@ -117,7 +124,15 @@ class GlobalPointer {
  private:
   uint64_t descriptor_ = 0;
 
-  inline executor_id home() const { return (executor_id)(descriptor_ >> 32); }
+  uint64_t al_mask(bool is_public) const {
+    uint64_t res = 0;
+    if (is_public) res = res | ((uint64_t)1 << 62);
+    return res;
+  }
+
+  inline executor_id home() const {
+    return (executor_id)((descriptor_ >> 32) & (((uint64_t)1 << 30) - 1));
+  }
   inline executor_id lsb() const {
     return descriptor_ & (((uint64_t)1 << 32) - 1);
   }
@@ -135,9 +150,8 @@ static uint64_t generate_lsb() {
   return cnt++;
 }
 
-static GlobalPointer make_global(executor_id home) {
-  assert(home <= GlobalPointer::max_home);  // todo error reporting
-  return GlobalPointer(home, generate_lsb());
+static GlobalPointer make_global(executor_id home, bool is_public) {
+  return GlobalPointer(home, is_public, generate_lsb());
 }
 
 } /* namespace gam */
