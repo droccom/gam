@@ -74,10 +74,6 @@ class View {
 
   inline executor_id owner(const uint64_t a) { return view_map[a].owner; }
 
-  inline executor_id author(const uint64_t a) { return view_map[a].author; }
-
-  inline uint64_t parent(void *const c) { return parent_map[c]; }
-
   inline void *child(const uint64_t a) { return view_map[a].child; }
 
   /*
@@ -87,10 +83,6 @@ class View {
    *
    ***************************************************************************
    */
-  inline bool has_parent(void *const c) {
-    return (parent_map.find(c) != parent_map.end());
-  }
-
   inline bool has_child(const uint64_t a) {
     return (view_map[a].child != nullptr);
   }
@@ -116,16 +108,6 @@ class View {
     LOGLN("VW  bind owner: %llu -> %lu", a, o);
   }
 
-  inline void bind_author(const uint64_t a, const executor_id a_) {
-    view_map[a].author = a_;
-    LOGLN("VW  bind author: %llu -> %lu", a, a_);
-  }
-
-  inline void bind_parent(void *const c, const uint64_t a) {
-    parent_map[c] = a;
-    LOGLN("VW  bind parent: %p -> %llu", c, a);
-  }
-
   inline void bind_child(const uint64_t a, void *const c) {
     view_map[a].child = c;
     LOGLN("VW  bind child: %llu -> %p", a, c);
@@ -147,14 +129,6 @@ class View {
     LOGLN("VW  cleared record=%llu", a);
   }
 
-  inline void unbind_parent(void *const c) {
-    assert(has_parent(c));
-
-    parent_map.erase(c);
-
-    LOGLN("VW  cleared parent for=%p", c);
-  }
-
   /*
    ***************************************************************************
    *
@@ -165,7 +139,7 @@ class View {
   std::string to_string(const uint64_t a) {
     std::stringstream s;
     s << "(committed=" << committed(a) << " owner=" << owner(a)
-      << " author=" << author(a) << " child=" << child(a) << ")";
+      << " child=" << child(a) << ")";
     return s.str();
   }
 
@@ -173,11 +147,10 @@ class View {
   struct entry {
     backend_ptr *committed = nullptr;
     void *child = nullptr;
-    executor_id owner, author;
+    executor_id owner;
   };
 
   ConcurrentMapWrap<std::unordered_map<uint64_t, entry>> view_map;
-  ConcurrentMapWrap<std::unordered_map<void *, uint64_t>> parent_map;
 };
 
 } /* namespace gam */

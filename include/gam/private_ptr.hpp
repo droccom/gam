@@ -240,10 +240,10 @@ class private_ptr {
   void reset() noexcept {
     LOGLN_OS("PVT reset=" << *this);
 
-    if (ctx().author(internal_gp) == ctx().rank())
+    if (internal_gp.author() == ctx().rank())
       ctx().unmap(internal_gp);
     else
-      ctx().forward_reset(internal_gp, ctx().author(internal_gp));
+      ctx().forward_reset(internal_gp);
 
     release();
   }

@@ -254,7 +254,7 @@ class Context {
     view.bind_owner(a, rank_);
 
     /* update parenthood information */
-    view.bind_parent(&lp, a);
+    bind_parent(&lp, res);
     view.bind_child(a, &lp);
 
     return res;
@@ -268,8 +268,8 @@ class Context {
     /* clean up parenthood */
     if (p.is_private()) {
       assert(view.has_child(a));
-      assert(view.has_parent(view.child(a)));
-      view.unbind_parent(view.child(a));
+      assert(has_parent(view.child(a)));
+      unbind_parent(view.child(a));
     } else
       assert(!view.has_child(a));
 
@@ -285,13 +285,11 @@ class Context {
    */
   inline void push_public(const GlobalPointer &p, const executor_id e) {
     assert(p.is_address());
-    uint64_t a = p.address();
     assert(p.is_public());
     LOGLN_OS("CTX push public=" << p << " to=" << e);
 
     pap_pointer buf;
     buf.p = p;
-    buf.author = view.author(a);
     pap_links->send(buf, e);
   }
 
@@ -307,7 +305,6 @@ class Context {
 
     pap_pointer buf;
     buf.p = p;
-    buf.author = view.author(a);
     pap_links->send(buf, e);
   }
 
@@ -408,7 +405,7 @@ class Context {
     T *lp = (T *)local_new<T>();
 
     /* load either locally or remotely */
-    if (view.author(a) == rank_)
+    if (p.author() == rank_)
       local_load(lp, a);
     else if (!cache.load(lp, a)) {
       forward_load(lp, p);
@@ -423,18 +420,17 @@ class Context {
    * local_private returns the pointer associated to (private) global address
    */
   template <typename T>
-  T *local_private(const GlobalPointer &p) {
+  T *local_private(GlobalPointer &p) {
     assert(p.is_address());
     uint64_t a = p.address();
     LOGLN_OS("CTX local private " << p);
     assert(p.is_private());
 
-    executor_id auth = view.author(a);
-
-    if (auth != rank_) {
+    if (p.author() != rank_) {
       /* steal memory and swap authorship */
+      auto old_ptr = p;
       withdraw<T>(p);
-      forward_reset(p, auth);
+      forward_reset(old_ptr);
     }
 
     return reinterpret_cast<T *>(view.committed(a)->get());
@@ -457,7 +453,6 @@ class Context {
     assert(p.is_private());
     assert(am_owner(p));
     uint64_t a = p.address();
-    executor_id auth = view.author(a);
 
     /* map to fresh global address */
     auto res = make_global(rank_, true);
@@ -466,11 +461,11 @@ class Context {
 
     /* steal memory */
     backend_ptr *bp_;
-    if (auth == rank_) {
+    if (p.author() == rank_) {
       assert(view.has_child(a));
-      assert(view.has_parent(view.child(a)));
+      assert(has_parent(view.child(a)));
 
-      view.unbind_parent(view.child(a));
+      unbind_parent(view.child(a));
       bp_ = view.committed(a);
     } else {
       assert(!view.has_child(a));
@@ -485,7 +480,7 @@ class Context {
       bp_ = tbp_;
 
       /* notify remote author  */
-      forward_reset(p, auth);
+      forward_reset(p);
     }
 
     /* clear old entry */
@@ -493,7 +488,7 @@ class Context {
 
     /* update fresh entry */
     view.bind_committed(a_, bp_);
-    view.bind_author(a_, rank_);
+    res.author(rank_);
     view.bind_owner(a_, (executor_id)GlobalPointer::max_home + 1);  // dummy
     view.bind_child(a_, nullptr);                                   // dummy
 
@@ -513,24 +508,14 @@ class Context {
     return view.owner(p.address()) == rank_;
   }
 
-  bool am_author(const GlobalPointer &p) {
-    assert(p.is_address());
-    return view.author(p.address()) == rank_;
-  }
-
-  executor_id author(const GlobalPointer &p) {
-    assert(p.is_address());
-    return view.author(p.address());
-  }
-
   template <typename T>
   bool has_parent(T *lp) {
-    return view.has_parent((void *)lp);
+    return (parent_map.find(lp) != parent_map.end());
   }
 
   template <typename T>
   GlobalPointer parent(T *lp) {
-    return GlobalPointer(view.parent((void *)lp));
+    return parent_map[lp];
   }
 
   /*
@@ -550,7 +535,7 @@ class Context {
     uint64_t a = p.address();
     assert(p.is_public());
 
-    if (view.author(a) == rank_)
+    if (p.author() == rank_)
       mc.rc_inc(a);
     else
       forward_inc(p);
@@ -561,7 +546,7 @@ class Context {
     uint64_t a = p.address();
     assert(p.is_public());
 
-    if (view.author(a) == rank_) {
+    if (p.author() == rank_) {
       if (mc.rc_dec(a) == 0)
         /*
          * destroy and un-bind committed memory
@@ -574,7 +559,21 @@ class Context {
   inline unsigned long long rc_get(GlobalPointer gp) {
     assert(gp.is_address());
     uint64_t a = gp.address();
-    return view.author(a) == rank_ ? local_rc_get(a) : forward_rc(gp);
+    return gp.author() == rank_ ? local_rc_get(a) : forward_rc(gp);
+  }
+
+  /*
+   * parenthood
+   */
+  inline void bind_parent(void *const c, const GlobalPointer p) {
+    parent_map[c] = p;
+    LOGLN_OS("VW  bind parent: " << c << " -> " << p);
+  }
+
+  inline void unbind_parent(void *const c) {
+    assert(has_parent(c));
+    parent_map.erase(c);
+    LOGLN("VW  cleared parent for=%p", c);
   }
 
   /*
@@ -584,14 +583,14 @@ class Context {
    *
    ***************************************************************************
    */
-  inline void forward_reset(const GlobalPointer &p, const executor_id to) {
+  inline void forward_reset(const GlobalPointer &p) {
     assert(p.is_address());
-    LOGLN("CTX fwd -1 %llu dest=%lu", p.address(), to);
+    LOGLN("CTX fwd -1 %llu dest=%lu", p.address(), p.author());
     daemon_pointer dp;
     dp.op = daemon_pointer::PVT_RESET;
     dp.from = rank_;
     dp.p = p;
-    local_links->send(dp, to);
+    local_links->send(dp, p.author());
   }
 
   /*
@@ -624,6 +623,8 @@ class Context {
   MemoryController mc;  // concurrent reference counting table
   Cache cache;
 
+  ConcurrentMapWrap<std::unordered_map<void *, GlobalPointer>> parent_map;
+
   std::thread *daemon;
   std::atomic<char> daemon_termination;
 
@@ -636,7 +637,6 @@ class Context {
    */
   struct pap_pointer {
     GlobalPointer p;
-    executor_id author = 0;
   };
 
   struct daemon_pointer {
@@ -714,30 +714,30 @@ class Context {
         switch (p.op) {
           case daemon_pointer::RC_INC:
             LOGLN("DMN recv +1 %llu from %lu", a, p.from);
-            assert(ctx.view.author(a) == ctx.rank_);
+            assert(p.p.author() == ctx.rank_);
             ctx.mc.rc_inc(a);
             break;
           case daemon_pointer::RC_DEC:
             LOGLN("DMN recv -1 %llu from %lu", a, p.from);
-            assert(ctx.view.author(a) == ctx.rank());
+            assert(p.p.author() == ctx.rank());
             if (ctx.mc.rc_dec(a) == 0) ctx.unmap(p.p);
             break;
           case daemon_pointer::RC_GET: {
             LOGLN("DMN recv RC_GET %llu from %lu", a, p.from);
-            assert(ctx.view.author(a) == ctx.rank_);
+            assert(p.p.author() == ctx.rank_);
             assert(ctx.view.committed(a) != nullptr);
             unsigned long long rc = ctx.local_rc_get(a);
             ctx.remote_links->raw_send(&rc, sizeof(unsigned long long), p.from);
           } break;
           case daemon_pointer::PVT_RESET:
             LOGLN("DMN recv PVT -1 %llu from %lu", a, p.from);
-            assert(ctx.view.author(a) == ctx.rank_);
+            assert(p.p.author() == ctx.rank_);
             assert(ctx.view.committed(a) != nullptr);
             ctx.unmap(p.p);
             break;
           case daemon_pointer::RLOAD:
             LOGLN("DMN recv RLOAD %llu from %lu", a, p.from);
-            assert(ctx.view.author(a) == ctx.rank_);
+            assert(p.p.author() == ctx.rank_);
             assert(ctx.view.committed(a) != nullptr);
             for (auto &me : ctx.view.committed(a)->marshall())
               ctx.remote_links->raw_send(me.base, me.size, p.from);
@@ -771,7 +771,7 @@ class Context {
     view.bind_committed(a, bp);
 
     /* update view information */
-    view.bind_author(a, rank_);
+    res.author(rank_);
 
     return res;
   }
@@ -790,35 +790,34 @@ class Context {
   }
 
   GlobalPointer pulled_public(const pap_pointer &buf) {
-    if (buf.p.is_address()) {
+    auto res = buf.p;
+    if (res.is_address()) {
       LOGLN_OS("CTX pulled public=" << buf.p);
 
-      uint64_t a = buf.p.address();
+      uint64_t a = res.address();
       view.bind_owner(a, (executor_id)GlobalPointer::max_home + 1);
-      view.bind_author(a, buf.author);
       view.bind_committed(a, nullptr);
     } else
-      LOGLN_OS("CTX pulled reserved=" << buf.p);
+      LOGLN_OS("CTX pulled reserved=" << res);
 
-    return buf.p;
+    return res;
   }
 
   GlobalPointer pulled_private(const pap_pointer &buf) {
-    if (buf.p.is_address()) {
+    auto res = buf.p;
+    if (res.is_address()) {
       LOGLN_OS("CTX pulled private=" << buf.p);
 
-      uint64_t a = buf.p.address();
-      if (!view.mapped(a) || buf.author != rank_) {
-        view.bind_author(a, buf.author);
+      uint64_t a = res.address();
+      if (!view.mapped(a) || res.author() != rank_)
         view.bind_committed(a, nullptr);
-      }
 
       /* take ownership */
       view.bind_owner(a, rank_);
     } else
-      LOGLN_OS("CTX pulled reserved=" << buf.p);
+      LOGLN_OS("CTX pulled reserved=" << res);
 
-    return buf.p;
+    return res;
   }
 
   template <typename T>
@@ -838,12 +837,12 @@ class Context {
    * @retval a raw pointer to the local memory for p
    */
   template <typename T>
-  inline T *withdraw(const GlobalPointer &p) {
+  inline T *withdraw(GlobalPointer &p) {
     assert(p.is_address());
     LOGLN_OS("CTX withdraw=" << p);
     uint64_t a = p.address();
     assert(p.is_private());
-    assert(!am_author(p));
+    assert(p.author() != rank_);
     assert(am_owner(p));
 
     /* allocate backend memory */
@@ -851,18 +850,18 @@ class Context {
     T *tmp = (T *)local_new<T>();
     using bp_t = backend_typed_ptr<T, void (*)(T *)>;
     bp_t *bp = local_new<bp_t>(tmp, DELETE<T>);
-
-    /* bind parenthood */
-    T *child = bp->typed_get();
-    view.bind_parent(child, a);
-    view.bind_child(a, child);
+    view.bind_committed(a, bp);
 
     /* issue remote load */
+    T *child = bp->typed_get();
     forward_load(child, p);
 
     /* take ownership */
-    view.bind_committed(a, bp);
-    view.bind_author(a, rank_);
+    p.author(rank_);
+
+    /* bind parenthood */
+    bind_parent(child, p);
+    view.bind_child(a, child);
 
     return bp->typed_get();
   }
@@ -888,7 +887,7 @@ class Context {
   void forward_load(T *lp, const GlobalPointer &p) {
     assert(p.is_address());
     uint64_t a = p.address();
-    executor_id to = view.author(a);
+    executor_id to = p.author();
     LOGLN("CTX fwd LOAD size=%zu %llu dest=%lu", sizeof(T), a, to);
 
     /* send remote-load request */
@@ -905,7 +904,7 @@ class Context {
   unsigned long long forward_rc(const GlobalPointer &p) {
     assert(p.is_address());
     uint64_t a = p.address();
-    executor_id to = view.author(a);
+    executor_id to = p.author();
     LOGLN("CTX fwd RC %llu dest=%lu", a, to);
 
     /* send remote-rc request */
@@ -921,7 +920,7 @@ class Context {
   inline void forward_inc(const GlobalPointer &p) {
     assert(p.is_address());
     uint64_t a = p.address();
-    executor_id dest = view.author(a);
+    executor_id dest = p.author();
     LOGLN("CTX fwd +1 %llu dest=%lu", a, dest);
     daemon_pointer dp;
     dp.op = daemon_pointer::RC_INC;
@@ -933,7 +932,7 @@ class Context {
   inline void forward_dec(const GlobalPointer &p) {
     assert(p.is_address());
     uint64_t a = p.address();
-    executor_id dest = view.author(a);
+    executor_id dest = p.author();
     LOGLN("CTX fwd -1 %llu dest=%lu", a, dest);
     daemon_pointer dp;
     dp.op = daemon_pointer::RC_DEC;

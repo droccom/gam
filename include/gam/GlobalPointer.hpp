@@ -100,6 +100,7 @@ class GlobalPointer {
    ***************************************************************************
    */
   inline uint64_t address() const { return descriptor_; }
+  inline executor_id author() const { return author_; }
 
   /*
    ***************************************************************************
@@ -109,20 +110,23 @@ class GlobalPointer {
    ***************************************************************************
    */
   inline void address(uint64_t d) { descriptor_ = d; }
+  inline void author(executor_id a) { author_ = a; }
 
   /**
    * @brief pretty-prints the pointer
    */
   friend std::ostream& operator<<(std::ostream& out, const GlobalPointer& f) {
     if (f.is_address())
-      out << "{addr=" << f.address() << " home=" << f.home() << "}";
+      out << "{[ADDRESS] lsb=" << f.lsb() << " home=" << f.home()
+          << " author=" << f.author() << "}";
     else
-      out << "{token=" << f.address() << "}";
+      out << "{[RESERVED] desc=" << f.address() << "}";
     return out;
   }
 
  private:
   uint64_t descriptor_ = 0;
+  executor_id author_ = GlobalPointer::max_home + 1;
 
   uint64_t al_mask(bool is_public) const {
     uint64_t res = 0;
